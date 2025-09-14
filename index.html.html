@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>甲状腺功能异常风险计算器</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-900">
+  <main class="max-w-3xl mx-auto p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl font-bold">甲状腺功能异常风险计算器</h1>
+      <p class="text-sm text-gray-600 mt-1">基于逻辑回归公式：<span class="mono">logit(P) = -3.13 + 0.64×TSH + 0.01×Time + 1.35×I(双侧叶) + 0.61×I(峡部) + 2.07×I(叶+峡部)</span></p>
+    </header>
+
+    <section class="grid gap-4 sm:grid-cols-2 bg-white rounded-2xl shadow p-5">
+      <div>
+        <label class="block text-sm font-medium mb-1" for="tsh">TSH（mIU/L）</label>
+        <input id="tsh" type="number" step="0.01" min="0" value="1.50" class="w-full rounded-xl border px-3 py-2" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1" for="time">Time（s）</label>
+        <input id="time" type="number" step="1" min="0" value="60" class="w-full rounded-xl border px-3 py-2" />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="block text-sm font-medium mb-1" for="loc">结节位置（参照：单侧叶）</label>
+        <select id="loc" class="w-full rounded-xl border px-3 py-2">
+          <option value="unilobe">单侧叶（参考组）</option>
+          <option value="bilobe">双侧叶</option>
+          <option value="isthmus">峡部</option>
+          <option value="lobe_isthmus">叶+峡部</option>
+        </select>
+      </div>
+      <div class="sm:col-span-2 flex items-center gap-3">
+        <button id="calc" class="rounded-2xl px-4 py-2 bg-blue-600 text-white font-medium hover:bg-blue-700">计算</button>
+        <button id="share" class="rounded-2xl px-4 py-2 border font-medium">复制当前链接</button>
+      </div>
+    </section>
+
+    <section class="mt-6 grid gap-4 sm:grid-cols-2">
+      <div class="bg-white rounded-2xl shadow p-5">
+        <h2 class="font-semibold mb-2">结果</h2>
+        <p class="text-sm text-gray-600">线性预测值（logit）： <span id="lp" class="mono font-semibold">—</span></p>
+        <p class="text-sm text-gray-600 mt-1">概率 P（发生甲功异常）：</p>
+        <p class="text-3xl font-bold mt-1" id="prob">—</p>
+        <p class="text-xs text-gray-500 mt-1">P = 1 / (1 + e<sup>−logit</sup>)</p>
+      </div>
+      <div class="bg-white rounded-2xl shadow p-5">
+        <h2 class="font-semibold mb-2">贡献分解</h2>
+        <ul id="terms" class="text-sm text-gray-700 space-y-1 mono"></ul>
+      </div>
+    </section>
+
+    <section class="mt-6 bg-white rounded-2xl shadow p-5">
+      <h2 class="font-semibold mb-2">模型说明</h2>
+      <ol class="list-decimal pl-5 text-sm text-gray-700 space-y-1">
+        <li>参考组为<strong>单侧叶</strong>结节。选择其他部位时，将相应哑变量 I(·)=1 加入。</li>
+        <li>本工具仅作学术演示，未做外部校准；临床使用需配合医生判断。</li>
+        <li>可通过参数写入 URL（如 <span class="mono">?tsh=1.5&time=60&loc=isthmus</span>）进行分享。</li>
+      </ol>
+    </section>
+
+    <footer class="mt-10 text-xs text-gray-500">
+      © <span id="year"></span> Risk Calculator · MIT License
+    </footer>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const inputs = { tsh: $("tsh"), time: $("time"), loc: $("loc") };
+    const out = { lp: $("lp"), prob: $("prob"), terms: $("terms") };
+
+    function coefForLoc(val) {
+      switch(val){
+        case 'bilobe': return { label: 'I(双侧叶)=1', value: 1.35 };
+        case 'isthmus': return { label: 'I(峡部)=1', value: 0.61 };
+        case 'lobe_isthmus': return { label: 'I(叶+峡部)=1', value: 2.07 };
+        default: return { label: 'I(参考组)=0', value: 0 };
+      }
+    }
+
+    function calc() {
+      const tsh = parseFloat(inputs.tsh.value || '0');
+      const time = parseFloat(inputs.time.value || '0');
+      const locInfo = coefForLoc(inputs.loc.value);
+
+      const base = -3.13;
+      const tshTerm = 0.64 * tsh;
+      const timeTerm = 0.01 * time;
+      const locTerm = locInfo.value;
+      const lp = base + tshTerm + timeTerm + locTerm;
+      const p = 1 / (1 + Math.exp(-lp));
+
+      out.lp.textContent = lp.toFixed(4);
+      out.prob.textContent = (p * 100).toFixed(1) + '%';
+
+      out.terms.innerHTML = '';
+      const pieces = [
+        { k: '常数项', v: base },
+        { k: '0.64×TSH', v: tshTerm },
+        { k: '0.01×Time', v: timeTerm },
+        { k: locInfo.label, v: locTerm }
+      ];
+      pieces.forEach(({k, v}) => {
+        const li = document.createElement('li');
+        li.textContent = `${k} = ${v.toFixed(4)}`;
+        out.terms.appendChild(li);
+      });
+
+      // 更新 URL 便于分享
+      const params = new URLSearchParams({ tsh: tsh, time: time, loc: inputs.loc.value });
+      history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
+    }
+
+    function readParams() {
+      const q = new URLSearchParams(location.search);
+      if (q.has('tsh')) inputs.tsh.value = q.get('tsh');
+      if (q.has('time')) inputs.time.value = q.get('time');
+      if (q.has('loc')) inputs.loc.value = q.get('loc');
+    }
+
+    function copyLink() {
+      navigator.clipboard.writeText(location.href).then(() => {
+        const btn = document.getElementById('share');
+        const old = btn.textContent;
+        btn.textContent = '已复制！';
+        setTimeout(() => btn.textContent = old, 1200);
+      });
+    }
+
+    ['input', 'change'].forEach(evt => {
+      inputs.tsh.addEventListener(evt, calc);
+      inputs.time.addEventListener(evt, calc);
+      inputs.loc.addEventListener(evt, calc);
+    });
+
+    document.getElementById('calc').addEventListener('click', calc);
+    document.getElementById('share').addEventListener('click', copyLink);
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    readParams();
+    calc();
+  </script>
+</body>
+</html>
