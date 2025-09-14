@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thyroid Dysfunction Risk Calculator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .hint { font-size: 12px; color: #6b7280;}
+  </style>
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-900">
+  <main class="max-w-3xl mx-auto p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl font-bold">Thyroid Dysfunction Risk Calculator</h1>
+      <p class="text-sm text-gray-600 mt-1">Logistic model: <span class="mono">logit(P) = -3.13 + 0.64×TSH + 0.01×Time + 1.35×I(Bilateral lobes) + 0.61×I(Isthmus) + 2.07×I(Lobe + isthmus)</span></p>
+    </header>
+
+    <section class="grid gap-4 sm:grid-cols-2 bg-white rounded-2xl shadow p-5">
+      <div>
+        <label class="block text-sm font-medium mb-1" for="tsh">TSH (mIU/L)</label>
+        <input id="tsh" type="number" step="0.01" min="0" value="1.50" class="w-full rounded-xl border px-3 py-2" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1" for="time">Time (s)</label>
+        <input id="time" type="number" step="1" min="0" value="60" class="w-full rounded-xl border px-3 py-2" />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="block text-sm font-medium mb-1" for="loc">Nodule location (ref: Unilateral lobe)</label>
+        <select id="loc" class="w-full rounded-xl border px-3 py-2">
+          <option value="unilobe">Unilateral lobe (reference)</option>
+          <option value="bilobe">Bilateral lobes</option>
+          <option value="isthmus">Isthmus</option>
+          <option value="lobe_isthmus">Lobe + isthmus</option>
+        </select>
+      </div>
+      <div class="sm:col-span-2 flex items-center gap-3">
+        <button id="calc" class="rounded-2xl px-4 py-2 bg-blue-600 text-white font-medium hover:bg-blue-700">Forward: compute P</button>
+        <button id="share" class="rounded-2xl px-4 py-2 border font-medium">Copy link</button>
+      </div>
+    </section>
+
+    <section class="mt-6 grid gap-4 sm:grid-cols-2">
+      <div class="bg-white rounded-2xl shadow p-5">
+        <h2 class="font-semibold mb-2">Result</h2>
+        <p class="text-sm text-gray-600">Linear predictor (logit): <span id="lp" class="mono font-semibold">—</span></p>
+        <p class="text-sm text-gray-600 mt-1">Probability P (thyroid dysfunction):</p>
+        <p class="text-3xl font-bold mt-1" id="prob">—</p>
+        <p class="text-xs text-gray-500 mt-1">P = 1 / (1 + e<sup>−logit</sup>)</p>
+      </div>
+      <div class="bg-white rounded-2xl shadow p-5">
+        <h2 class="font-semibold mb-2">Term contributions</h2>
+        <ul id="terms" class="text-sm text-gray-700 space-y-1 mono"></ul>
+      </div>
+    </section>
+
+    <!-- Inverse section: target P -> one max time (non-negative) -->
+    <section class="mt-6 grid gap-4 sm:grid-cols-2">
+      <div class="bg-white rounded-2xl shadow p-5 sm:col-span-1">
+        <h2 class="font-semibold mb-2">Inverse: set target P ⇒ get required Time</h2>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="block text-sm font-medium mb-1" for="ptarget">Target P (0–1)</label>
+            <input id="ptarget" type="number" step="0.001" min="0" max="0.9999" value="0.80" class="w-full rounded-xl border px-3 py-2" />
+            <p class="hint mt-1">Ablation time cannot be negative; the result is clamped at 0 s.</p>
+          </div>
+          <div class="sm:col-span-2 flex items-center gap-3">
+            <button id="invert" class="rounded-2xl px-4 py-2 bg-emerald-600 text-white font-medium hover:bg-emerald-700">Compute required Time</button>
+            <button id="applyT" class="rounded-2xl px-3 py-2 border font-medium">Apply to Time</button>
+          </div>
+        </div>
+        <p class="text-xs text-gray-500 mt-3">Formula: <span class="mono">Time = max(0, (logit(P) − b − 0.64×TSH − Loc) / 0.01)</span>, with <span class="mono">logit(P)=ln(P/(1−P))</span>, <span class="mono">b=-3.13</span>.</p>
+      </div>
+      <div class="bg-white rounded-2xl shadow p-5 sm:col-span-1">
+        <h2 class="font-semibold mb-2">Required Time</h2>
+        <p class="text-sm text-gray-600">to reach the specified P:</p>
+        <p id="tSingleBig" class="text-3xl font-bold mt-1">—</p>
+        <div class="mt-3 p-3 rounded-xl bg-gray-50 border text-sm">
+          <div class="font-medium">Details</div>
+          <div class="mono mt-1">Time* = <span id="tSingle">—</span> s</div>
+          <ul id="invTerms" class="mono mt-2 space-y-1"></ul>
+          <div id="invWarn" class="text-amber-700 mt-2"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mt-6 bg-white rounded-2xl shadow p-5">
+      <h2 class="font-semibold mb-2">Notes</h2>
+      <ol class="list-decimal pl-5 text-sm text-gray-700 space-y-1">
+        <li>Reference location is <strong>Unilateral lobe</strong>. Other locations add the corresponding dummy term.</li>
+        <li>Because the coefficient for Time is positive (0.01), P increases monotonically with Time. Thus, the required Time to achieve a target P is unique.</li>
+        <li>No external calibration. For research/education only.</li>
+        <li>Parameters can be shared via URL, e.g. <span class="mono">?tsh=1.5&time=60&loc=isthmus&p=0.8</span></li>
+      </ol>
+    </section>
+
+    <footer class="mt-10 text-xs text-gray-500">
+      © <span id="year"></span> Risk Calculator · MIT License
+    </footer>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const inputs = { tsh: $("tsh"), time: $("time"), loc: $("loc"), p: $("ptarget") };
+    const out = { lp: $("lp"), prob: $("prob"), terms: $("terms"),
+                  tSingleBig: $("tSingleBig"), tSingle: $("tSingle"),
+                  invTerms: $("invTerms"), invWarn: $("invWarn") };
+
+    function coefForLoc(val) {
+      switch(val){
+        case 'bilobe': return { label: 'I(Bilateral lobes)=1', value: 1.35 };
+        case 'isthmus': return { label: 'I(Isthmus)=1', value: 0.61 };
+        case 'lobe_isthmus': return { label: 'I(Lobe+isthmus)=1', value: 2.07 };
+        default: return { label: 'I(Reference)=0', value: 0 };
+      }
+    }
+
+    function safeNumber(x, fallback=0){
+      const v = parseFloat(x);
+      return Number.isFinite(v) ? v : fallback;
+    }
+
+    function clip(v, lo, hi){
+      return Math.min(hi, Math.max(lo, v));
+    }
+
+    function calcForward() {
+      const tsh = safeNumber(inputs.tsh.value, 0);
+      const time = safeNumber(inputs.time.value, 0);
+      const locInfo = coefForLoc(inputs.loc.value);
+
+      const base = -3.13;
+      const tshTerm = 0.64 * tsh;
+      const timeTerm = 0.01 * time;
+      const locTerm = locInfo.value;
+      const lp = base + tshTerm + timeTerm + locTerm;
+      const p = 1 / (1 + Math.exp(-lp));
+
+      out.lp.textContent = lp.toFixed(4);
+      out.prob.textContent = (p * 100).toFixed(1) + '%';
+
+      out.terms.innerHTML = '';
+      const pieces = [
+        { k: 'Intercept', v: base },
+        { k: '0.64×TSH', v: tshTerm },
+        { k: '0.01×Time', v: timeTerm },
+        { k: locInfo.label, v: locTerm }
+      ];
+      pieces.forEach(({k, v}) => {
+        const li = document.createElement('li');
+        li.textContent = `${k} = ${v.toFixed(4)}`;
+        out.terms.appendChild(li);
+      });
+
+      const params = new URLSearchParams({ tsh: tsh, time: time, loc: inputs.loc.value, p: inputs.p.value });
+      history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
+    }
+
+    function logit(p){
+      return Math.log(p / (1 - p));
+    }
+
+    function calcInverse(){
+      const tsh = safeNumber(inputs.tsh.value, 0);
+      const locInfo = coefForLoc(inputs.loc.value);
+      const base = -3.13;
+      const locTerm = locInfo.value;
+
+      let p = safeNumber(inputs.p.value, 0.8);
+      // Clamp in (0,1) and avoid exactly 0 or 1 for logit stability.
+      const eps = 1e-6;
+      p = clip(p, eps, 1 - eps);
+
+      // Time = max(0, (logit(P) − base − 0.64×TSH − loc) / 0.01)
+      const k = 0.01;
+      const offset = base + 0.64*tsh + locTerm;
+      let timeRequired = (logit(p) - offset) / k;
+      if (!Number.isFinite(timeRequired)) timeRequired = 0;
+      timeRequired = Math.max(0, timeRequired);
+
+      out.tSingleBig.textContent = `${timeRequired.toFixed(1)} s`;
+      out.tSingle.textContent = timeRequired.toFixed(1);
+
+      out.invTerms.innerHTML = "";
+      const arr = [
+        {k:'logit(P)', v: logit(p)},
+        {k:'Intercept + 0.64×TSH + Loc', v: offset},
+        {k:'1 / 0.01', v: 1/0.01}
+      ];
+      arr.forEach(({k,v})=>{
+        const li = document.createElement('li');
+        li.textContent = `${k} = ${v.toFixed(4)}`;
+        out.invTerms.appendChild(li);
+      });
+
+      let warn = "";
+      if (timeRequired > 3600){
+        warn = "Note: Required ablation time exceeds 1 hour. Consider clinical feasibility or adjust the target P.";
+      }
+      out.invWarn.textContent = warn;
+
+      const params = new URLSearchParams({ tsh: tsh, time: safeNumber(inputs.time.value, 0), loc: inputs.loc.value, p: p });
+      history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
+    }
+
+    function readParams() {
+      const q = new URLSearchParams(location.search);
+      if (q.has('tsh')) inputs.tsh.value = q.get('tsh');
+      if (q.has('time')) inputs.time.value = q.get('time');
+      if (q.has('loc')) inputs.loc.value = q.get('loc');
+      if (q.has('p')) inputs.p.value = q.get('p');
+    }
+
+    function copyLink() {
+      navigator.clipboard.writeText(location.href).then(() => {
+        const btn = document.getElementById('share');
+        const old = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = old, 1200);
+      });
+    }
+
+    function applyTime(){
+      const v = parseFloat(out.tSingle.textContent);
+      if (Number.isFinite(v)){
+        inputs.time.value = Math.round(v).toString();
+        calcForward();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+
+    ['input', 'change'].forEach(evt => {
+      inputs.tsh.addEventListener(evt, calcForward);
+      inputs.time.addEventListener(evt, calcForward);
+      inputs.loc.addEventListener(evt, calcForward);
+      inputs.p.addEventListener(evt, () => {});
+    });
+
+    $("calc").addEventListener('click', calcForward);
+    $("invert").addEventListener('click', calcInverse);
+    $("share").addEventListener('click', copyLink);
+    $("applyT").addEventListener('click', applyTime);
+    $("year").textContent = new Date().getFullYear();
+
+    readParams();
+    calcForward();
+  </script>
+</body>
+</html>
